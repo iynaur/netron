@@ -6,11 +6,12 @@ var gzip = gzip || {};
 gzip.Archive = class {
 
     constructor(buffer) {
+        const reader = buffer instanceof Uint8Array ? new gzip.Reader(buffer, 0, buffer.length) : buffer;
         this._entries = [];
-        if (buffer.length < 18 || buffer[0] !== 0x1f || buffer[1] !== 0x8b) {
+        const signature = [ 0x1f, 0x8b ];
+        if (reader.length < 18 || !reader.peek(2).every((value, index) => value === signature[index])) {
             throw new gzip.Error('Invalid gzip archive.');
         }
-        const reader = new gzip.Reader(buffer, 0, buffer.length);
         this._entries.push(new gzip.Entry(reader));
     }
 
@@ -22,7 +23,8 @@ gzip.Archive = class {
 gzip.Entry = class {
 
     constructor(reader) {
-        if (!reader.match([ 0x1f, 0x8b ])) {
+        const signature = reader.uint16();
+        if (signature != 0x8b1f) {
             throw new gzip.Error('Invalid gzip signature.');
         }
         const compressionMethod = reader.byte();
@@ -76,10 +78,10 @@ gzip.Entry = class {
 
 gzip.Reader = class {
 
-    constructor(buffer, start, end) {
+    constructor(buffer) {
         this._buffer = buffer;
-        this._position = start;
-        this._end = end;
+        this._position = 0;
+        this._length = buffer.length;
         this._view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     }
 

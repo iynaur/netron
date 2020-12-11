@@ -341,7 +341,7 @@ view.View = class {
     }
 
     open(context) {
-        this._host.event('Model', 'Open', 'Size', context.buffer.length);
+        this._host.event('Model', 'Open', 'Size', context.reader.length);
         this._sidebar.close();
         return this._timeout(2).then(() => {
             return this._modelFactoryService.open(context).then((model) => {
@@ -1040,7 +1040,7 @@ view.ModelContext = class {
     }
 
     get buffer() {
-        return this._context.buffer;
+        return this._context.reader.peek();
     }
 
     entries(format) {
@@ -1314,13 +1314,14 @@ view.ModelFactoryService = class {
 
     _openArchive(context) {
         const entries = new Map();
+        const reader = context.reader;
         let extension;
         let identifier = context.identifier;
-        let buffer = context.buffer;
+        let buffer = reader.peek(Math.min(16, reader.length));
         try {
             extension = identifier.split('.').pop().toLowerCase();
             if (extension === 'gz' || extension === 'tgz' || (buffer.length >= 18 && buffer[0] === 0x1f && buffer[1] === 0x8b)) {
-                const entries = new gzip.Archive(buffer).entries;
+                const entries = new gzip.Archive(reader).entries;
                 if (entries.length === 1) {
                     const entry = entries[0];
                     if (entry.name) {
@@ -1350,7 +1351,7 @@ view.ModelFactoryService = class {
         try {
             extension = identifier.split('.').pop().toLowerCase();
             if (extension === 'zip' || (buffer.length > 2 && buffer[0] === 0x50 && buffer[1] === 0x4B)) {
-                entries.set('zip', new zip.Archive(buffer).entries);
+                entries.set('zip', new zip.Archive(reader).entries);
             }
             if (extension === 'tar' || (buffer.length >= 512)) {
                 let sum = 0;
@@ -1363,7 +1364,7 @@ view.ModelFactoryService = class {
                 }
                 checksum = parseInt(checksum, 8);
                 if (!isNaN(checksum) && sum === checksum) {
-                    entries.set('tar', new tar.Archive(buffer).entries);
+                    entries.set('tar', new tar.Archive(reader).entries);
                 }
             }
         }
@@ -1387,6 +1388,11 @@ view.ModelFactoryService = class {
                     }
                     const modelFactory = new module.ModelFactory();
                     if (!modelFactory.match(context)) {
+
+                        if (context._context._reader.position !== 0) {
+                            debugger;
+                        }
+        
                         return nextModule();
                     }
                     match = true;
@@ -1521,8 +1527,19 @@ view.ModelFactoryService = class {
     }
 
     _openSignature(context) {
-        const buffer = context.buffer;
-        if (buffer.length === 0 || buffer.every((value) => value === 0x00)) {
+        const reader = context.reader;
+        let empty = true;
+        let position = 0;
+        while (empty && position < reader.length) {
+            const buffer = reader.read(Math.min(4096, reader.length - position));
+            position += buffer.length;
+            if (!buffer.every((value) => value === 0x00)) {
+                empty = false;
+                break;
+            }
+        }
+        reader.seek(0);
+        if (empty) {
             return Promise.reject(new view.ModelError('File has no content.', true));
         }
         /* eslint-disable no-control-regex */
@@ -1541,7 +1558,8 @@ view.ModelFactoryService = class {
             { name: "TensorFlow Hub module", value: /^\x08\x03$/, identifier: 'tfhub_module.pb' }
         ];
         /* eslint-enable no-control-regex */
-        const text = new TextDecoder().decode(buffer.subarray(0, Math.min(4096, buffer.length)));
+        const buffer = reader.peek(Math.min(4096, reader.length));
+        const text = new TextDecoder().decode(buffer);
         for (const entry of entries) {
             if (text.match(entry.value) && (!entry.identifier || entry.identifier === context.identifier)) {
                 return Promise.reject(new view.ModelError("Invalid file content. File contains " + entry.name + ".", true));
